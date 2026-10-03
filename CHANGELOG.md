@@ -1,5 +1,9 @@
 # XIVExp
 
+## 0.2.1
+
+- No changes in the game. From this version, releases are published automatically to CurseForge as well as GitHub.
+
 ## 0.2.0
 
 ### Reputation
