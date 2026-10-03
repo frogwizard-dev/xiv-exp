@@ -1,5 +1,14 @@
 # XIVExp
 
+## 0.3.0
+
+### Leveling info
+- New text on the right under the bar, "14 kills   1h 20m" by default: how many kills to level (from your last few kills, rested bonus included) and how long to level at your pace this session. Change it on the Text tab with the words tolevel, perhour (XP an hour), eta and quests (XP in finished quests you haven't handed in), or leave it empty to hide it.
+- XP waiting in finished quests shows on the bar too, as an orange stretch after your XP (like rested XP in blue), so you can see how far handing them in takes you. It can be turned off or recoloured on the Text tab.
+
+### Fixes
+- Fixed a "file not found" font error after EllesmereUI is turned off or removed while its font (Expressway) is chosen. The game's standard font is used until you pick another.
+
 ## 0.2.1
 
 - No changes in the game. From this version, releases are published automatically to CurseForge as well as GitHub.

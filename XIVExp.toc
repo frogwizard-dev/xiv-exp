@@ -1,7 +1,7 @@
 ## Interface: 16001, 120000, 120001, 120005, 120007, 120100
 ## Title: XIVExp
 ## Notes: An FFXIV-style experience bar: a thin gold line with rested XP in blue, your watched reputation above it, and "PLD Lv20 EXP ..." underneath.
-## Version: 0.2.1
+## Version: 0.3.0
 ## X-Curse-Project-ID: 1724075
 ## OptionalDeps: EllesmereUI
 ## SavedVariables: XIVExpDB

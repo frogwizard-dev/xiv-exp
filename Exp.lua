@@ -23,6 +23,14 @@ ns.defaults = {
     -- standingColors: tint by standing (red hostile ... green friendly); off: always `color`.
     rep = { enabled = true, text = "short standing   value/max", hideBlizzard = true,
         standingColors = true, color = { r = 0.45, g = 0.80, b = 0.30 } },
+    -- Leveling info, on the right under the bar. Words: tolevel (kills to level, from your
+    -- recent kills), perhour (XP an hour this session), eta (time to level at that rate), quests
+    -- (XP in finished quests not yet handed in). Empty hides it.
+    info = "tolevel kills   eta",
+    -- XP waiting in finished quests, as a stretch of the bar after your XP (like rested).
+    showQuests = true,
+    questColor = { r = 1.00, g = 0.62, b = 0.25 },
+    kills = {}, -- each character's last few kills' XP, for "tolevel"
 }
 
 -- Three-letter class tags, FFXIV-style (it shows "MCH", "PLD" and so on).
@@ -54,6 +62,126 @@ end
 
 local Exp = {}
 ns.Exp = Exp
+
+------------------------------------------------------------------------------
+-- Leveling info: kills to level, XP an hour, time to level, XP in finished quests
+------------------------------------------------------------------------------
+
+local KILLS_KEPT = 10 -- the average is over this many recent kills
+local NONE = "\226\128\147" -- an en dash, until there's something to show
+
+-- "Kobold dies, you gain 45 experience. (+45 exp Rested bonus)" and its group and raid
+-- forms: the game's own strings, made into patterns, whose first number is the XP.
+local killPatterns
+local function KillPatterns()
+    if killPatterns then return killPatterns end
+    killPatterns = {}
+    local keys = { "COMBATLOG_XPGAIN_FIRSTPERSON" }
+    for i = 1, 5 do keys[#keys + 1] = "COMBATLOG_XPGAIN_EXHAUSTION" .. i end
+    for _, base in ipairs({ unpack(keys) }) do
+        keys[#keys + 1] = base .. "_GROUP"
+        keys[#keys + 1] = base .. "_RAID"
+    end
+    for _, key in ipairs(keys) do
+        local fmt = _G[key]
+        if type(fmt) == "string" then
+            local pattern = fmt:gsub("([%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")
+            pattern = pattern:gsub("%%s", "(.-)"):gsub("%%d", "(%%d+)")
+            killPatterns[#killPatterns + 1] = "^" .. pattern
+        end
+    end
+    -- The longest first, so a message with a rested bonus isn't taken by the plain form.
+    table.sort(killPatterns, function(a, b) return #a > #b end)
+    return killPatterns
+end
+
+local function CharacterKey()
+    return (UnitName("player") or "?") .. "-" .. (GetRealmName() or "?")
+end
+
+local function RecentKills()
+    local key = CharacterKey()
+    ns.db.kills[key] = ns.db.kills[key] or {}
+    return ns.db.kills[key]
+end
+
+function Exp:OnKillMessage(msg)
+    if not msg or issecret(msg) then return end
+    for _, pattern in ipairs(KillPatterns()) do
+        local caps = { msg:match(pattern) }
+        for _, cap in ipairs(caps) do
+            local xp = tonumber(cap)
+            if xp then
+                local kills = RecentKills()
+                table.insert(kills, xp)
+                while #kills > KILLS_KEPT do table.remove(kills, 1) end
+                return
+            end
+        end
+    end
+end
+
+-- XP gained this session, for the hourly rate.
+function Exp:CountXP()
+    local xp, max, level = UnitXP("player"), UnitXPMax("player"), UnitLevel("player")
+    if issecret(xp) or issecret(max) then return end
+    local s = self.session
+    if s.xp then
+        local gained = xp - s.xp
+        if level > s.level then gained = (s.max - s.xp) + xp end
+        if gained > 0 then s.gained = s.gained + gained end
+    end
+    s.xp, s.max, s.level = xp, max, level
+end
+
+-- The XP in finished quests still in your log.
+local function QuestXP()
+    local Q = C_QuestLog
+    if not (Q and Q.GetNumQuestLogEntries and GetQuestLogRewardXP) then return 0 end
+    local total = 0
+    for i = 1, Q.GetNumQuestLogEntries() do
+        local info = Q.GetInfo(i)
+        if info and not info.isHeader and info.questID and Q.IsComplete(info.questID) then
+            total = total + (GetQuestLogRewardXP(info.questID) or 0)
+        end
+    end
+    return total
+end
+
+local function Short(n)
+    if n >= 1000000 then return string.format("%.1fm", n / 1000000) end
+    if n >= 10000 then return string.format("%.0fk", n / 1000) end
+    if n >= 1000 then return string.format("%.1fk", n / 1000) end
+    return tostring(math.floor(n))
+end
+
+local function Duration(seconds)
+    if seconds >= 3600 then
+        return string.format("%dh %02dm", math.floor(seconds / 3600), math.floor(seconds % 3600 / 60))
+    end
+    return string.format("%dm", math.max(1, math.floor(seconds / 60)))
+end
+
+-- The words' values, for xp of max.
+function Exp:Leveling(xp, max)
+    local left = max - xp
+    local vals = { tolevel = NONE, perhour = NONE, eta = NONE, quests = Short(self.questXP or 0) }
+    local kills = RecentKills()
+    if #kills > 0 then
+        local sum = 0
+        for _, k in ipairs(kills) do sum = sum + k end
+        vals.tolevel = tostring(math.ceil(left / (sum / #kills)))
+    end
+    local s = self.session
+    local elapsed = GetTime() - s.start
+    -- A rate needs a couple of minutes behind it to mean anything.
+    if s.gained > 0 and elapsed >= 120 then
+        local perHour = s.gained / elapsed * 3600
+        vals.perhour = Short(perHour)
+        vals.eta = Duration(left / perHour * 3600)
+    end
+    return vals
+end
 
 ------------------------------------------------------------------------------
 -- Reputation
@@ -214,9 +342,21 @@ function Exp:Init()
     g.trackCap:SetAlpha(0)
     self.gauge = g
 
+    -- XP in finished quests: between the rested bar and the XP gauge, from your XP onwards.
+    local quests = CreateFrame("StatusBar", nil, f)
+    quests:SetPoint("TOPLEFT")
+    quests:SetPoint("TOPRIGHT")
+    quests:SetFrameLevel(rested:GetFrameLevel() + 1)
+    g.bar:SetFrameLevel(quests:GetFrameLevel() + 1)
+    self.quests = quests
+
     self.text = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     self.text:SetPoint("TOPLEFT", g.bar, "BOTTOMLEFT", 2, -5)
     self.text:SetShadowOffset(1, -1)
+    self.info = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    self.info:SetPoint("TOPRIGHT", g.bar, "BOTTOMRIGHT", -2, -5)
+    self.info:SetJustifyH("RIGHT")
+    self.info:SetShadowOffset(1, -1)
 
     -- Reputation: the same gauge-and-text block, above the XP one (placed in Update).
     self.rep = ns.CreateGauge(f)
@@ -225,11 +365,25 @@ function Exp:Init()
     self.repText:SetShadowOffset(1, -1)
 
     for _, event in ipairs({ "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD",
-        "UPDATE_FACTION" }) do
+        "UPDATE_FACTION", "QUEST_LOG_UPDATE", "CHAT_MSG_COMBAT_XP_GAIN" }) do
         f:RegisterEvent(event)
     end
     pcall(f.RegisterEvent, f, "MAJOR_FACTION_RENOWN_LEVEL_CHANGED")
-    f:SetScript("OnEvent", function() self:Update() end)
+    self.session = { start = GetTime(), gained = 0 }
+    self.questXP = QuestXP()
+    f:SetScript("OnEvent", function(_, event, msg)
+        if event == "CHAT_MSG_COMBAT_XP_GAIN" then
+            self:OnKillMessage(msg)
+        elseif event == "PLAYER_XP_UPDATE" or event == "PLAYER_LEVEL_UP" then
+            self:CountXP()
+        elseif event == "QUEST_LOG_UPDATE" then
+            self.questXP = QuestXP()
+        end
+        self:Update()
+    end)
+    self:CountXP()
+    -- The time to level moves with the clock, not just with XP.
+    C_Timer.NewTicker(15, function() self:Update() end)
     self:Apply()
 end
 
@@ -249,8 +403,13 @@ function Exp:Apply()
     self.rested:SetHeight(db.height)
     self.rested:SetStatusBarTexture(db.texture)
     self.rested:SetStatusBarColor(db.restedColor.r, db.restedColor.g, db.restedColor.b, 0.85)
+    self.quests:SetHeight(db.height)
+    self.quests:SetStatusBarTexture(db.texture)
+    self.quests:SetStatusBarColor(db.questColor.r, db.questColor.g, db.questColor.b, 0.9)
     ns.Media:SetFont(self.text, db.font, db.size, db.outline)
     self.text:SetTextColor(Light(db.xpColor))
+    ns.Media:SetFont(self.info, db.font, db.size, db.outline)
+    self.info:SetTextColor(Light(db.xpColor))
     self.rep:SetHeight(db.height)
     self.rep:SetTexture(db.texture)
     ns.Media:SetFont(self.repText, db.font, db.size, db.outline)
@@ -283,6 +442,8 @@ function Exp:Update()
     self.gauge.bar:SetShown(showXP)
     self.rested:SetShown(showXP)
     self.text:SetShown(showXP)
+    self.quests:SetShown(showXP and db.showQuests and not maxed)
+    self.info:SetShown(showXP and not maxed)
     if not showXP then return end
 
     if maxed then
@@ -295,8 +456,13 @@ function Exp:Update()
 
     self.gauge:SetValues(xp, max)
     self.rested:SetMinMaxValues(0, max)
+    self.quests:SetMinMaxValues(0, max)
     if not issecret(xp) and not issecret(max) then
         self.rested:SetValue(math.min(max, xp + rested))
+        self.quests:SetValue(math.min(max, xp + (self.questXP or 0)))
+        UI.SetTemplateText(self.info, db.info, self:Leveling(xp, max), { "tolevel", "perhour", "eta", "quests" })
+    else
+        self.info:Hide()
     end
 
     local pct = (not issecret(xp) and not issecret(max) and max > 0) and (xp / max * 100) or 0
@@ -386,7 +552,15 @@ local function BuildText(p)
         function() return db.font end, function(v) db.font = v end), 30)
     place(UI.Dropdown(p, "Font outline", UI.OUTLINES, function() return db.outline end,
         function(v) db.outline = v end), 30)
-    place(UI.Stepper(p, "Text size", 8, 24, 1, function() return db.size end, function(v) db.size = v end), 26)
+    place(UI.Stepper(p, "Text size", 8, 24, 1, function() return db.size end, function(v) db.size = v end), 34)
+    place(UI.TextBox(p, "Right-hand text", function() return db.info end, function(v) db.info = v end), 30)
+    place(UI.Help(p, "Words: |cffffd100tolevel|r (kills to level, from your last few kills), "
+        .. "|cffffd100perhour|r (XP an hour this session), |cffffd100eta|r (time to level at that rate), "
+        .. "|cffffd100quests|r (XP in finished quests you haven't handed in). Leave empty to hide.", 400), 48, 4)
+    place(UI.Checkbox(p, "Show finished quests' XP on the bar",
+        function() return db.showQuests end, function(v) db.showQuests = v end), 28)
+    place(UI.ColorSwatch(p, "Quest XP colour", function() return db.questColor end,
+        function(r, g, b) db.questColor = { r = r, g = g, b = b } end), 30)
 end
 
 local function BuildRep(p)
@@ -410,7 +584,7 @@ end
 
 function ns.ToggleConfig()
     if not ns.window then
-        ns.window = UI.Window("XIVExpConfig", "XIVExp", 440, 400, {
+        ns.window = UI.Window("XIVExpConfig", "XIVExp", 440, 470, {
             { "layout", "Layout", BuildLayout },
             { "text", "Text", BuildText },
             { "rep", "Reputation", BuildRep },
