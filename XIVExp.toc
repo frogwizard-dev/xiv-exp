@@ -1,7 +1,7 @@
 ## Interface: 16001, 120000, 120001, 120005, 120007, 120100
 ## Title: XIVExp
 ## Notes: An FFXIV-style experience bar: a thin gold line with rested XP in blue and "PLD Lv20 EXP ..." underneath.
-## Version: 0.1.2
+## Version: 0.2.0
 ## OptionalDeps: EllesmereUI
 ## SavedVariables: XIVExpDB
 ## IconTexture: Interface\Icons\INV_Misc_Book_11
