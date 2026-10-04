@@ -625,7 +625,7 @@ SlashCmdList.XIVEXP = ns.ToggleConfig
 function XIVExp_OnCompartmentClick() ns.ToggleConfig() end
 
 -- Its entry in the game's Options > AddOns list (Options.lua).
-ns.AddOptionsPanel({
+FrogLib.Options.Add("XIVExp", ns, {
     open = function()
         if not (ns.window and ns.window:IsShown()) then ns.ToggleConfig() end
     end,
