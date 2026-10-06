@@ -2,7 +2,7 @@
 ## Title: XIVExp
 ## Category: Frog Wizard
 ## Notes: An FFXIV-style experience bar: a thin gold line with rested XP in blue, your watched reputation above it, and "PLD Lv20 EXP ..." underneath.
-## Version: 0.3.3
+## Version: 0.3.4
 ## X-Curse-Project-ID: 1724075
 ## OptionalDeps: EllesmereUI
 ## SavedVariables: XIVExpDB
@@ -11,6 +11,5 @@
 
 Libs\FrogLib\FrogLib.xml
 Media.lua
-Gauge.lua
 ConfigKit.lua
 Exp.lua

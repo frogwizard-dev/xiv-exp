@@ -40,16 +40,7 @@ local CLASS_TAGS = {
     MONK = "MNK", DEMONHUNTER = "DHN", EVOKER = "EVK",
 }
 
-local function CopyDefaults(src, dst)
-    for k, v in pairs(src) do
-        if type(v) == "table" then
-            if type(dst[k]) ~= "table" then dst[k] = {} end
-            CopyDefaults(v, dst[k])
-        elseif dst[k] == nil then
-            dst[k] = v
-        end
-    end
-end
+local CopyDefaults = FrogLib.Util.CopyDefaults
 
 local function Commas(n)
     if issecret(n) then return n end
@@ -310,17 +301,8 @@ function Exp:Init()
     local f = CreateFrame("Frame", "XIVExpFrame", UIParent)
     f:SetClampedToScreen(true)
     f:SetMovable(true)
-    f:RegisterForDrag("LeftButton")
-    f:SetScript("OnDragStart", f.StartMoving)
-    f:SetScript("OnDragStop", function(frame)
-        frame:StopMovingOrSizing()
-        local p, _, rp, x, y = frame:GetPoint()
-        ns.db.point = { p, "UIParent", rp, x, y }
-    end)
-    f.unlockTint = f:CreateTexture(nil, "BACKGROUND")
-    f.unlockTint:SetPoint("TOPLEFT", -6, 6)
-    f.unlockTint:SetPoint("BOTTOMRIGHT", 6, -6)
-    f.unlockTint:SetColorTexture(0.3, 0.6, 1, 0.2)
+    -- Dragged while unlocked; the tint marks it (FrogLib's Mover.lua).
+    FrogLib.Mover.Make(f, { save = function(point) ns.db.point = point end, tint = 6 })
     self.frame = f
 
     -- Rested XP sits behind the XP gauge, running from your XP onwards in blue.
@@ -334,7 +316,7 @@ function Exp:Init()
     track:SetColorTexture(0, 0, 0, 0.45)
     self.rested = rested
 
-    local g = ns.CreateGauge(f)
+    local g = FrogLib.Gauge.New(f)
     g.bar:SetPoint("TOPLEFT")
     g.bar:SetPoint("TOPRIGHT")
     g.bar:SetFrameLevel(rested:GetFrameLevel() + 1)
@@ -360,7 +342,7 @@ function Exp:Init()
     self.info:SetShadowOffset(1, -1)
 
     -- Reputation: the same gauge-and-text block, above the XP one (placed in Update).
-    self.rep = ns.CreateGauge(f)
+    self.rep = FrogLib.Gauge.New(f)
     self.repText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     self.repText:SetPoint("TOPLEFT", self.rep.bar, "BOTTOMLEFT", 2, -5)
     self.repText:SetShadowOffset(1, -1)
