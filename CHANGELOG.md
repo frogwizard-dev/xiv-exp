@@ -1,5 +1,14 @@
 # XIVExp
 
+## 0.3.3
+
+### Fixes
+- An experience message the game hides from add-ons no longer causes an error, and neither does being at the level cap when the game hides that.
+- Text with more than six words now keeps updating (it stopped).
+
+### Under the hood
+- Text templates and the text's light tint are FrogLib's, shared with the other Frog Wizard add-ons.
+
 ## 0.3.2
 
 ### Under the hood

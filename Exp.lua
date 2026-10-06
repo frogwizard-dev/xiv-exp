@@ -1,6 +1,6 @@
 local ADDON, ns = ...
 local UI = ns.UI
-local issecret = issecretvalue or function() return false end
+local issecret = FrogLib.issecret
 
 ns.defaults = {
     locked = true,
@@ -56,8 +56,9 @@ local function Commas(n)
     return BreakUpLargeNumbers and BreakUpLargeNumbers(n) or tostring(n)
 end
 
+-- Text in a light version of its bar's colour, as FFXIV does.
 local function Light(c)
-    return c.r + (1 - c.r) * 0.55, c.g + (1 - c.g) * 0.55, c.b + (1 - c.b) * 0.55
+    return FrogLib.Color.Lighten(c.r, c.g, c.b, 0.55)
 end
 
 local Exp = {}
@@ -106,7 +107,7 @@ local function RecentKills()
 end
 
 function Exp:OnKillMessage(msg)
-    if not msg or issecret(msg) then return end
+    if issecret(msg) or not msg then return end
     for _, pattern in ipairs(KillPatterns()) do
         local caps = { msg:match(pattern) }
         for _, cap in ipairs(caps) do
@@ -422,7 +423,7 @@ end
 local function AtMaxLevel(max)
     if IsPlayerAtEffectiveMaxLevel then
         local ok, maxed = pcall(IsPlayerAtEffectiveMaxLevel)
-        if ok and maxed and not issecret(maxed) then return true end
+        if ok and not issecret(maxed) and maxed then return true end
     end
     return not max or max == 0
 end
@@ -467,7 +468,7 @@ function Exp:Update()
 
     local pct = (not issecret(xp) and not issecret(max) and max > 0) and (xp / max * 100) or 0
     UI.SetTemplateText(self.text, db.text, {
-        class = tag, level = tostring(level), value = Commas(xp), max = Commas(max),
+        class = tag, level = Commas(level), value = Commas(xp), max = Commas(max),
         percent = pct, rested = Commas(rested),
     }, { "class", "level", "value", "max", "rested" })
 end
