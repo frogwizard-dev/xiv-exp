@@ -1,6 +1,8 @@
 local ADDON, ns = ...
-local UI = ns.UI
 local issecret = FrogLib.issecret
+
+-- The settings controls are FrogLib's (UI.lua); every change calls ns.Refresh().
+local UI = FrogLib.UI.Kit({ refresh = function() ns.Refresh() end })
 
 ns.defaults = {
     locked = true,
@@ -23,9 +25,8 @@ ns.defaults = {
     -- standingColors: tint by standing (red hostile ... green friendly); off: always `color`.
     rep = { enabled = true, text = "short standing   value/max", hideBlizzard = true,
         standingColors = true, color = { r = 0.45, g = 0.80, b = 0.30 } },
-    -- Leveling info, on the right under the bar. Words: tolevel (kills to level, from your
-    -- recent kills), perhour (XP an hour this session), eta (time to level at that rate), quests
-    -- (XP in finished quests not yet handed in). Empty hides it.
+    -- Leveling info under the bar's right end. Words: tolevel (kills to level, by recent kills), perhour
+    -- (XP an hour this session), eta (time to level at that rate), quests (XP in finished quests).
     info = "tolevel kills   eta",
     -- XP waiting in finished quests, as a stretch of the bar after your XP (like rested).
     showQuests = true,
@@ -42,14 +43,14 @@ local CLASS_TAGS = {
 
 local CopyDefaults = FrogLib.Util.CopyDefaults
 
-local function Commas(n)
-    if issecret(n) then return n end
-    return BreakUpLargeNumbers and BreakUpLargeNumbers(n) or tostring(n)
+local function Commas(number)
+    if issecret(number) then return number end
+    return BreakUpLargeNumbers and BreakUpLargeNumbers(number) or tostring(number)
 end
 
 -- Text in a light version of its bar's colour, as FFXIV does.
-local function Light(c)
-    return FrogLib.Color.Lighten(c.r, c.g, c.b, 0.55)
+local function Light(color)
+    return FrogLib.Color.Lighten(color.r, color.g, color.b, 0.55)
 end
 
 local Exp = {}
@@ -60,7 +61,7 @@ ns.Exp = Exp
 ------------------------------------------------------------------------------
 
 local KILLS_KEPT = 10 -- the average is over this many recent kills
-local NONE = "\226\128\147" -- an en dash, until there's something to show
+local NONE = "-"      -- until there's something to show
 
 -- "Kobold dies, you gain 45 experience. (+45 exp Rested bonus)" and its group and raid
 -- forms: the game's own strings, made into patterns, whose first number is the XP.
@@ -75,15 +76,15 @@ local function KillPatterns()
         keys[#keys + 1] = base .. "_RAID"
     end
     for _, key in ipairs(keys) do
-        local fmt = _G[key]
-        if type(fmt) == "string" then
-            local pattern = fmt:gsub("([%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")
+        local template = _G[key]
+        if type(template) == "string" then
+            local pattern = template:gsub("([%(%)%.%+%-%*%?%[%]%^%$])", "%%%1")
             pattern = pattern:gsub("%%s", "(.-)"):gsub("%%d", "(%%d+)")
             killPatterns[#killPatterns + 1] = "^" .. pattern
         end
     end
     -- The longest first, so a message with a rested bonus isn't taken by the plain form.
-    table.sort(killPatterns, function(a, b) return #a > #b end)
+    table.sort(killPatterns, function(first, second) return #first > #second end)
     return killPatterns
 end
 
@@ -97,18 +98,23 @@ local function RecentKills()
     return ns.db.kills[key]
 end
 
-function Exp:OnKillMessage(msg)
-    if issecret(msg) or not msg then return end
+-- The first of a match's captures that's a number (no table made for them).
+local function FirstNumber(...)
+    for i = 1, select("#", ...) do
+        local number = tonumber((select(i, ...)))
+        if number then return number end
+    end
+end
+
+function Exp:OnKillMessage(message)
+    if issecret(message) or not message then return end
     for _, pattern in ipairs(KillPatterns()) do
-        local caps = { msg:match(pattern) }
-        for _, cap in ipairs(caps) do
-            local xp = tonumber(cap)
-            if xp then
-                local kills = RecentKills()
-                table.insert(kills, xp)
-                while #kills > KILLS_KEPT do table.remove(kills, 1) end
-                return
-            end
+        local xp = FirstNumber(message:match(pattern))
+        if xp then
+            local kills = RecentKills()
+            table.insert(kills, xp)
+            while #kills > KILLS_KEPT do table.remove(kills, 1) end
+            return
         end
     end
 end
@@ -117,34 +123,34 @@ end
 function Exp:CountXP()
     local xp, max, level = UnitXP("player"), UnitXPMax("player"), UnitLevel("player")
     if issecret(xp) or issecret(max) then return end
-    local s = self.session
-    if s.xp then
-        local gained = xp - s.xp
-        if level > s.level then gained = (s.max - s.xp) + xp end
-        if gained > 0 then s.gained = s.gained + gained end
+    local session = self.session
+    if session.xp then
+        local gained = xp - session.xp
+        if level > session.level then gained = (session.max - session.xp) + xp end
+        if gained > 0 then session.gained = session.gained + gained end
     end
-    s.xp, s.max, s.level = xp, max, level
+    session.xp, session.max, session.level = xp, max, level
 end
 
 -- The XP in finished quests still in your log.
 local function QuestXP()
-    local Q = C_QuestLog
-    if not (Q and Q.GetNumQuestLogEntries and GetQuestLogRewardXP) then return 0 end
+    local QuestLog = C_QuestLog
+    if not (QuestLog and QuestLog.GetNumQuestLogEntries and GetQuestLogRewardXP) then return 0 end
     local total = 0
-    for i = 1, Q.GetNumQuestLogEntries() do
-        local info = Q.GetInfo(i)
-        if info and not info.isHeader and info.questID and Q.IsComplete(info.questID) then
+    for i = 1, QuestLog.GetNumQuestLogEntries() do
+        local info = QuestLog.GetInfo(i)
+        if info and not info.isHeader and info.questID and QuestLog.IsComplete(info.questID) then
             total = total + (GetQuestLogRewardXP(info.questID) or 0)
         end
     end
     return total
 end
 
-local function Short(n)
-    if n >= 1000000 then return string.format("%.1fm", n / 1000000) end
-    if n >= 10000 then return string.format("%.0fk", n / 1000) end
-    if n >= 1000 then return string.format("%.1fk", n / 1000) end
-    return tostring(math.floor(n))
+local function Short(amount)
+    if amount >= 1000000 then return string.format("%.1fm", amount / 1000000) end
+    if amount >= 10000 then return string.format("%.0fk", amount / 1000) end
+    if amount >= 1000 then return string.format("%.1fk", amount / 1000) end
+    return tostring(math.floor(amount))
 end
 
 local function Duration(seconds)
@@ -157,22 +163,22 @@ end
 -- The words' values, for xp of max.
 function Exp:Leveling(xp, max)
     local left = max - xp
-    local vals = { tolevel = NONE, perhour = NONE, eta = NONE, quests = Short(self.questXP or 0) }
+    local values = { tolevel = NONE, perhour = NONE, eta = NONE, quests = Short(self.questXP or 0) }
     local kills = RecentKills()
     if #kills > 0 then
         local sum = 0
-        for _, k in ipairs(kills) do sum = sum + k end
-        vals.tolevel = tostring(math.ceil(left / (sum / #kills)))
+        for _, killXP in ipairs(kills) do sum = sum + killXP end
+        values.tolevel = tostring(math.ceil(left / (sum / #kills)))
     end
-    local s = self.session
-    local elapsed = GetTime() - s.start
+    local session = self.session
+    local elapsed = GetTime() - session.start
     -- A rate needs a couple of minutes behind it to mean anything.
-    if s.gained > 0 and elapsed >= 120 then
-        local perHour = s.gained / elapsed * 3600
-        vals.perhour = Short(perHour)
-        vals.eta = Duration(left / perHour * 3600)
+    if session.gained > 0 and elapsed >= 120 then
+        local perHour = session.gained / elapsed * 3600
+        values.perhour = Short(perHour)
+        values.eta = Duration(left / perHour * 3600)
     end
-    return vals
+    return values
 end
 
 ------------------------------------------------------------------------------
@@ -186,42 +192,41 @@ local UTF8_CHAR = "[%z\1-\127\194-\244][\128-\191]*"
 
 local function Initials(name)
     local words = {}
-    for w in name:gmatch("[^%s%-%(%)]+") do
-        if not MINOR_WORDS[w:lower()] then words[#words + 1] = w end
+    for word in name:gmatch("[^%s%-%(%)]+") do
+        if not MINOR_WORDS[word:lower()] then words[#words + 1] = word end
     end
     if #words == 0 then return name end
     if #words == 1 then
-        local out, n = "", 0
-        for ch in words[1]:gmatch(UTF8_CHAR) do
-            out, n = out .. ch, n + 1
-            if n == 3 then break end
+        local initials, count = "", 0
+        for char in words[1]:gmatch(UTF8_CHAR) do
+            initials, count = initials .. char, count + 1
+            if count == 3 then break end
         end
-        return out:upper()
+        return initials:upper()
     end
-    local out = ""
-    for _, w in ipairs(words) do out = out .. (w:match(UTF8_CHAR) or "") end
-    return out:upper()
+    local initials = ""
+    for _, word in ipairs(words) do initials = initials .. (word:match(UTF8_CHAR) or "") end
+    return initials:upper()
 end
 
--- The watched faction, read the way Blizzard's own reputation bar reads it (Forever has the
--- retail reputation API; the friendship, renown and paragon parts are skipped where it lacks
--- them). Returns nil when nothing is watched.
+-- The watched faction, read the way Blizzard's own reputation bar reads it (friendship, renown and
+-- paragon parts skipped where Forever lacks them). Returns nil when nothing is watched.
 local function WatchedReputation()
-    local R = C_Reputation
-    local d = R and R.GetWatchedFactionData and R.GetWatchedFactionData()
-    if not d or not d.factionID or d.factionID == 0 or not d.name or d.name == "" then return nil end
-    local id, reaction = d.factionID, d.reaction
-    local low, high, value = d.currentReactionThreshold, d.nextReactionThreshold, d.currentStanding
+    local Reputation = C_Reputation
+    local data = Reputation and Reputation.GetWatchedFactionData and Reputation.GetWatchedFactionData()
+    if not data or not data.factionID or data.factionID == 0 or not data.name or data.name == "" then return nil end
+    local id, reaction = data.factionID, data.reaction
+    local low, high, value = data.currentReactionThreshold, data.nextReactionThreshold, data.currentStanding
     local standing = (GetText and GetText("FACTION_STANDING_LABEL" .. reaction, UnitSex("player")))
         or _G["FACTION_STANDING_LABEL" .. reaction] or ""
     local capped = MAX_REPUTATION_REACTION and reaction >= MAX_REPUTATION_REACTION
 
-    if R.IsFactionParagonForCurrentPlayer and R.IsFactionParagonForCurrentPlayer(id) then
-        local current, threshold = R.GetFactionParagonInfo(id)
+    if Reputation.IsFactionParagonForCurrentPlayer and Reputation.IsFactionParagonForCurrentPlayer(id) then
+        local current, threshold = Reputation.GetFactionParagonInfo(id)
         if current and threshold then
             low, high, value, capped = 0, threshold, current % threshold, false
         end
-    elseif R.IsMajorFaction and R.IsMajorFaction(id) and C_MajorFactions then
+    elseif Reputation.IsMajorFaction and Reputation.IsMajorFaction(id) and C_MajorFactions then
         local major = C_MajorFactions.GetMajorFactionData(id)
         if major and major.renownLevelThreshold then
             low, high, value, capped = 0, major.renownLevelThreshold, major.renownReputationEarned or 0, false
@@ -242,7 +247,7 @@ local function WatchedReputation()
     local max = high - low
     value = value - low
     if capped or max <= 0 then max, value, capped = 1, 1, true end
-    return { name = d.name, short = Initials(d.name), standing = standing, value = value, max = max,
+    return { name = data.name, short = Initials(data.name), standing = standing, value = value, max = max,
         reaction = reaction, capped = capped }
 end
 
@@ -250,10 +255,8 @@ end
 -- Blizzard's XP and reputation bars
 ------------------------------------------------------------------------------
 
--- They live in two bar containers, which swap bars with fade animations. Hiding a container
--- stalls those animations and with them the swapping, so the bars we replace, and a
--- container's frame while it holds one, go see-through instead. Nothing moves, so it works in
--- combat, but the space the bars took stays.
+-- Two containers swap these bars with fade animations, which stall if a container is hidden: so the bars
+-- we replace, and a container's frame holding one, go see-through. Fine in combat; their space stays.
 local hookedContainers = {}
 
 local function Replaced(barIndex)
@@ -263,10 +266,10 @@ local function Replaced(barIndex)
     return false
 end
 
-local function DressContainer(c)
+local function DressContainer(container)
     local bars = StatusTrackingBarInfo.BarsEnum
     for _, index in ipairs({ bars.Experience, bars.Reputation }) do
-        local bar = c.bars and c.bars[index]
+        local bar = container.bars and container.bars[index]
         if bar then
             local hide = Replaced(index)
             bar:SetAlpha(hide and 0 or 1)
@@ -274,10 +277,10 @@ local function DressContainer(c)
             if bar.ExhaustionTick then bar.ExhaustionTick:EnableMouse(not hide) end
         end
     end
-    local frameAlpha = Replaced(c.shownBarIndex) and 0 or 1
-    if c.BarFrameTexture then c.BarFrameTexture:SetAlpha(frameAlpha) end
-    if c.HorizontalDividersPool then
-        for divider in c.HorizontalDividersPool:EnumerateActive() do divider:SetAlpha(frameAlpha) end
+    local frameAlpha = Replaced(container.shownBarIndex) and 0 or 1
+    if container.BarFrameTexture then container.BarFrameTexture:SetAlpha(frameAlpha) end
+    if container.HorizontalDividersPool then
+        for divider in container.HorizontalDividersPool:EnumerateActive() do divider:SetAlpha(frameAlpha) end
     end
 end
 
@@ -286,27 +289,27 @@ function Exp:DressBlizzardBar()
     if not (manager and manager.barContainers and StatusTrackingBarInfo and StatusTrackingBarInfo.BarsEnum) then
         return
     end
-    for _, c in ipairs(manager.barContainers) do
-        if not hookedContainers[c] then
-            hookedContainers[c] = true
+    for _, container in ipairs(manager.barContainers) do
+        if not hookedContainers[container] then
+            hookedContainers[container] = true
             -- A new bar moved in; the dividers are re-made when the layout changes.
-            hooksecurefunc(c, "ApplyPendingBarToShow", DressContainer)
-            hooksecurefunc(c, "UpdateDividers", DressContainer)
+            hooksecurefunc(container, "ApplyPendingBarToShow", DressContainer)
+            hooksecurefunc(container, "UpdateDividers", DressContainer)
         end
-        DressContainer(c)
+        DressContainer(container)
     end
 end
 
 function Exp:Init()
-    local f = CreateFrame("Frame", "XIVExpFrame", UIParent)
-    f:SetClampedToScreen(true)
-    f:SetMovable(true)
+    local frame = CreateFrame("Frame", "XIVExpFrame", UIParent)
+    frame:SetClampedToScreen(true)
+    frame:SetMovable(true)
     -- Dragged while unlocked; the tint marks it (FrogLib's Mover.lua).
-    FrogLib.Mover.Make(f, { save = function(point) ns.db.point = point end, tint = 6 })
-    self.frame = f
+    FrogLib.Mover.Make(frame, { save = function(point) ns.db.point = point end, tint = 6 })
+    self.frame = frame
 
     -- Rested XP sits behind the XP gauge, running from your XP onwards in blue.
-    local rested = CreateFrame("StatusBar", nil, f)
+    local rested = CreateFrame("StatusBar", nil, frame)
     rested:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
     rested:SetPoint("TOPLEFT")
     rested:SetPoint("TOPRIGHT")
@@ -316,69 +319,89 @@ function Exp:Init()
     track:SetColorTexture(0, 0, 0, 0.45)
     self.rested = rested
 
-    local g = FrogLib.Gauge.New(f)
-    g.bar:SetPoint("TOPLEFT")
-    g.bar:SetPoint("TOPRIGHT")
-    g.bar:SetFrameLevel(rested:GetFrameLevel() + 1)
+    local gauge = FrogLib.Gauge.New(frame)
+    gauge.bar:SetPoint("TOPLEFT")
+    gauge.bar:SetPoint("TOPRIGHT")
+    gauge.bar:SetFrameLevel(rested:GetFrameLevel() + 1)
     -- The rested bar draws the track here, so the gauge's own would dim the blue.
-    g.track:SetAlpha(0)
-    g.trackCap:SetAlpha(0)
-    self.gauge = g
+    gauge.track:SetAlpha(0)
+    gauge.trackCap:SetAlpha(0)
+    self.gauge = gauge
 
     -- XP in finished quests: between the rested bar and the XP gauge, from your XP onwards.
-    local quests = CreateFrame("StatusBar", nil, f)
+    local quests = CreateFrame("StatusBar", nil, frame)
     quests:SetPoint("TOPLEFT")
     quests:SetPoint("TOPRIGHT")
     quests:SetFrameLevel(rested:GetFrameLevel() + 1)
-    g.bar:SetFrameLevel(quests:GetFrameLevel() + 1)
+    gauge.bar:SetFrameLevel(quests:GetFrameLevel() + 1)
     self.quests = quests
 
-    self.text = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    self.text:SetPoint("TOPLEFT", g.bar, "BOTTOMLEFT", 2, -5)
+    self.text = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    self.text:SetPoint("TOPLEFT", gauge.bar, "BOTTOMLEFT", 2, -5)
     self.text:SetShadowOffset(1, -1)
-    self.info = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    self.info:SetPoint("TOPRIGHT", g.bar, "BOTTOMRIGHT", -2, -5)
+    self.info = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    self.info:SetPoint("TOPRIGHT", gauge.bar, "BOTTOMRIGHT", -2, -5)
     self.info:SetJustifyH("RIGHT")
     self.info:SetShadowOffset(1, -1)
 
     -- Reputation: the same gauge-and-text block, above the XP one (placed in Update).
-    self.rep = FrogLib.Gauge.New(f)
-    self.repText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    self.rep = FrogLib.Gauge.New(frame)
+    self.repText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     self.repText:SetPoint("TOPLEFT", self.rep.bar, "BOTTOMLEFT", 2, -5)
     self.repText:SetShadowOffset(1, -1)
 
     for _, event in ipairs({ "PLAYER_XP_UPDATE", "UPDATE_EXHAUSTION", "PLAYER_LEVEL_UP", "PLAYER_ENTERING_WORLD",
         "UPDATE_FACTION", "QUEST_LOG_UPDATE", "CHAT_MSG_COMBAT_XP_GAIN" }) do
-        f:RegisterEvent(event)
+        frame:RegisterEvent(event)
     end
-    pcall(f.RegisterEvent, f, "MAJOR_FACTION_RENOWN_LEVEL_CHANGED")
+    pcall(frame.RegisterEvent, frame, "MAJOR_FACTION_RENOWN_LEVEL_CHANGED")
     self.session = { start = GetTime(), gained = 0 }
     self.questXP = QuestXP()
-    f:SetScript("OnEvent", function(_, event, msg)
+    -- The quest log changes in bursts (several QUEST_LOG_UPDATE at once): walked once, a quarter second after.
+    local questsQueued = false
+    local function QuestsSettled()
+        questsQueued = false
+        self.questXP = QuestXP()
+        self:Update()
+    end
+    frame:SetScript("OnEvent", function(_, event, message)
         if event == "CHAT_MSG_COMBAT_XP_GAIN" then
-            self:OnKillMessage(msg)
+            self:OnKillMessage(message)
         elseif event == "PLAYER_XP_UPDATE" or event == "PLAYER_LEVEL_UP" then
             self:CountXP()
         elseif event == "QUEST_LOG_UPDATE" then
-            self.questXP = QuestXP()
+            if not questsQueued then
+                questsQueued = true
+                C_Timer.After(0.25, QuestsSettled)
+            end
+            return
         end
         self:Update()
     end)
     self:CountXP()
-    -- The time to level moves with the clock, not just with XP.
-    C_Timer.NewTicker(15, function() self:Update() end)
+    -- The time to level moves with the clock, not only with XP: looked at every 15 seconds while the bar shows.
+    frame:HookScript("OnShow", function()
+        self.clock = self.clock or C_Timer.NewTicker(15, function() self:Update() end)
+    end)
+    frame:HookScript("OnHide", function()
+        if self.clock then
+            self.clock:Cancel()
+            self.clock = nil
+        end
+    end)
+    if frame:IsShown() then self.clock = C_Timer.NewTicker(15, function() self:Update() end) end
     self:Apply()
 end
 
 function Exp:Apply()
     local db = ns.db
-    local f = self.frame
-    f:SetScale(db.scale)
-    f:ClearAllPoints()
-    f:SetPoint(db.point[1], UIParent, db.point[3], db.point[4], db.point[5])
-    f:SetSize(db.width, db.height + db.size + 8)
-    f:EnableMouse(not db.locked)
-    f.unlockTint:SetShown(not db.locked)
+    local frame = self.frame
+    frame:SetScale(db.scale)
+    frame:ClearAllPoints()
+    frame:SetPoint(db.point[1], UIParent, db.point[3], db.point[4], db.point[5])
+    frame:SetSize(db.width, db.height + db.size + 8)
+    frame:EnableMouse(not db.locked)
+    frame.unlockTint:SetShown(not db.locked)
 
     self.gauge:SetHeight(db.height)
     self.gauge:SetTexture(db.texture)
@@ -448,10 +471,10 @@ function Exp:Update()
         self.info:Hide()
     end
 
-    local pct = (not issecret(xp) and not issecret(max) and max > 0) and (xp / max * 100) or 0
+    local percent = (not issecret(xp) and not issecret(max) and max > 0) and (xp / max * 100) or 0
     UI.SetTemplateText(self.text, db.text, {
         class = tag, level = Commas(level), value = Commas(xp), max = Commas(max),
-        percent = pct, rested = Commas(rested),
+        percent = percent, rested = Commas(rested),
     }, { "class", "level", "value", "max", "rested" })
 end
 
@@ -480,24 +503,24 @@ function Exp:UpdateRep(xpShown)
         bar:SetPoint("TOPRIGHT", xpBar, "TOPRIGHT")
     end
 
-    local c = cfg.color
+    local color = cfg.color
     if cfg.standingColors then
-        local fc = FACTION_BAR_COLORS and FACTION_BAR_COLORS[rep.reaction]
-        if fc then c = fc end
+        local standingColor = FACTION_BAR_COLORS and FACTION_BAR_COLORS[rep.reaction]
+        if standingColor then color = standingColor end
     end
-    self.rep:SetColor(c.r, c.g, c.b)
-    self.repText:SetTextColor(Light(c))
+    self.rep:SetColor(color.r, color.g, color.b)
+    self.repText:SetTextColor(Light(color))
     self.rep:SetValues(rep.value, rep.max)
 
-    local vals = { name = rep.name, short = rep.short, standing = rep.standing,
+    local values = { name = rep.name, short = rep.short, standing = rep.standing,
         value = Commas(rep.value), max = Commas(rep.max), percent = rep.value / rep.max * 100 }
     local words = { "name", "short", "standing", "value", "max" }
     local template = cfg.text
     if rep.capped then
-        -- At the top there's nothing left to count: just the faction and standing.
+        -- At the top there's nothing left to count: only the faction and standing.
         template = template:lower():find("name", 1, true) and "name standing" or "short standing"
     end
-    UI.SetTemplateText(self.repText, template, vals, words)
+    UI.SetTemplateText(self.repText, template, values, words)
     return true
 end
 
@@ -505,63 +528,50 @@ end
 -- Settings window
 ------------------------------------------------------------------------------
 
-local function BuildLayout(p)
+local function BuildLayout(page)
     local db = ns.db
     local place = UI.Placer()
-    place(UI.Checkbox(p, "Unlock to move (drag the bar)",
-        function() return not db.locked end, function(v) db.locked = not v end), 34)
-    place(UI.Stepper(p, "Scale", 0.5, 2, 0.05, function() return db.scale end, function(v) db.scale = v end, "%.2f"), 26)
-    place(UI.Stepper(p, "Width", 100, 1600, 10, function() return db.width end, function(v) db.width = v end), 26)
-    place(UI.Stepper(p, "Height", 1, 12, 1, function() return db.height end, function(v) db.height = v end), 32)
-    place(UI.Dropdown(p, "Bar texture", function() return ns.Media:List("statusbar") end,
-        function() return db.texture end, function(v) db.texture = v end), 30)
-    place(UI.ColorSwatch(p, "XP colour", function() return db.xpColor end,
-        function(r, g, b) db.xpColor = { r = r, g = g, b = b } end), 28)
-    place(UI.ColorSwatch(p, "Rested colour", function() return db.restedColor end,
-        function(r, g, b) db.restedColor = { r = r, g = g, b = b } end), 36)
-    place(UI.Checkbox(p, "Hide at max level",
-        function() return db.hideAtMax end, function(v) db.hideAtMax = v end), 28)
-    place(UI.Checkbox(p, "Hide Blizzard's XP bar",
-        function() return db.hideBlizzard end, function(v) db.hideBlizzard = v end), 28)
+    place(UI.Checkbox(page, "Unlock to move (drag the bar)",
+        function() return not db.locked end, function(value) db.locked = not value end), 34)
+    place(UI.Stepper(page, "Scale", 0.5, 2, 0.05, db, "scale", "%.2f"), 26)
+    place(UI.Stepper(page, "Width", 100, 1600, 10, db, "width"), 26)
+    place(UI.Stepper(page, "Height", 1, 12, 1, db, "height"), 32)
+    place(UI.Dropdown(page, "Bar texture", function() return ns.Media:List("statusbar") end, db, "texture"), 30)
+    place(UI.ColorSwatch(page, "XP colour", db, "xpColor"), 28)
+    place(UI.ColorSwatch(page, "Rested colour", db, "restedColor"), 36)
+    place(UI.Checkbox(page, "Hide at max level", db, "hideAtMax"), 28)
+    place(UI.Checkbox(page, "Hide Blizzard's XP bar", db, "hideBlizzard"), 28)
 end
 
-local function BuildText(p)
+local function BuildText(page)
     local db = ns.db
     local place = UI.Placer()
-    place(UI.TextBox(p, "Text", function() return db.text end, function(v) db.text = v end), 30)
-    place(UI.Help(p, "Words: |cffffd100class|r, |cffffd100level|r, |cffffd100value|r, |cffffd100max|r, "
+    place(UI.TextBox(page, "Text", db, "text"), 30)
+    place(UI.Help(page, "Words: |cffffd100class|r, |cffffd100level|r, |cffffd100value|r, |cffffd100max|r, "
         .. "|cffffd100percent|r (|cffffd100percent.1|r for a decimal), |cffffd100rested|r. Leave empty to hide.", 400), 36, 4)
-    place(UI.Dropdown(p, "Font", function() return ns.Media:List("font") end,
-        function() return db.font end, function(v) db.font = v end), 30)
-    place(UI.Dropdown(p, "Font outline", UI.OUTLINES, function() return db.outline end,
-        function(v) db.outline = v end), 30)
-    place(UI.Stepper(p, "Text size", 8, 24, 1, function() return db.size end, function(v) db.size = v end), 34)
-    place(UI.TextBox(p, "Right-hand text", function() return db.info end, function(v) db.info = v end), 30)
-    place(UI.Help(p, "Words: |cffffd100tolevel|r (kills to level, from your last few kills), "
+    place(UI.Dropdown(page, "Font", function() return ns.Media:List("font") end, db, "font"), 30)
+    place(UI.Dropdown(page, "Font outline", UI.OUTLINES, db, "outline"), 30)
+    place(UI.Stepper(page, "Text size", 8, 24, 1, db, "size"), 34)
+    place(UI.TextBox(page, "Right-hand text", db, "info"), 30)
+    place(UI.Help(page, "Words: |cffffd100tolevel|r (kills to level, from your last few kills), "
         .. "|cffffd100perhour|r (XP an hour this session), |cffffd100eta|r (time to level at that rate), "
         .. "|cffffd100quests|r (XP in finished quests you haven't handed in). Leave empty to hide.", 400), 48, 4)
-    place(UI.Checkbox(p, "Show finished quests' XP on the bar",
-        function() return db.showQuests end, function(v) db.showQuests = v end), 28)
-    place(UI.ColorSwatch(p, "Quest XP colour", function() return db.questColor end,
-        function(r, g, b) db.questColor = { r = r, g = g, b = b } end), 30)
+    place(UI.Checkbox(page, "Show finished quests' XP on the bar", db, "showQuests"), 28)
+    place(UI.ColorSwatch(page, "Quest XP colour", db, "questColor"), 30)
 end
 
-local function BuildRep(p)
-    local cfg = ns.db.rep
+local function BuildRep(page)
+    local rep = ns.db.rep
     local place = UI.Placer()
-    place(UI.Checkbox(p, "Show my watched reputation above the XP bar",
-        function() return cfg.enabled end, function(v) cfg.enabled = v end), 28)
-    place(UI.Checkbox(p, "Hide Blizzard's reputation bar",
-        function() return cfg.hideBlizzard end, function(v) cfg.hideBlizzard = v end), 34)
-    place(UI.TextBox(p, "Text", function() return cfg.text end, function(v) cfg.text = v end), 30)
-    place(UI.Help(p, "Words: |cffffd100short|r (the faction's initials, e.g. AD), |cffffd100name|r, "
+    place(UI.Checkbox(page, "Show my watched reputation above the XP bar", rep, "enabled"), 28)
+    place(UI.Checkbox(page, "Hide Blizzard's reputation bar", rep, "hideBlizzard"), 34)
+    place(UI.TextBox(page, "Text", rep, "text"), 30)
+    place(UI.Help(page, "Words: |cffffd100short|r (the faction's initials, e.g. AD), |cffffd100name|r, "
         .. "|cffffd100standing|r, |cffffd100value|r, |cffffd100max|r, |cffffd100percent|r. "
-        .. "At Exalted it shows just the faction and standing.", 400), 44, 4)
-    place(UI.Checkbox(p, "Colour by standing (red hostile to green friendly)",
-        function() return cfg.standingColors end, function(v) cfg.standingColors = v end), 30)
-    place(UI.ColorSwatch(p, "Colour otherwise", function() return cfg.color end,
-        function(r, g, b) cfg.color = { r = r, g = g, b = b } end), 36)
-    place(UI.Help(p, "To choose the reputation, open your character window's Reputation tab, click a "
+        .. "At Exalted it shows only the faction and standing.", 400), 44, 4)
+    place(UI.Checkbox(page, "Colour by standing (red hostile to green friendly)", rep, "standingColors"), 30)
+    place(UI.ColorSwatch(page, "Colour otherwise", rep, "color"), 36)
+    place(UI.Help(page, "To choose the reputation, open your character window's Reputation tab, click a "
         .. "faction and tick \"Show as Experience Bar\".", 400), 36, 4)
 end
 
@@ -588,8 +598,8 @@ end
 local loader = CreateFrame("Frame")
 loader:RegisterEvent("ADDON_LOADED")
 loader:RegisterEvent("PLAYER_LOGIN")
-loader:SetScript("OnEvent", function(_, event, arg1)
-    if event == "ADDON_LOADED" and arg1 == ADDON then
+loader:SetScript("OnEvent", function(_, event, addonName)
+    if event == "ADDON_LOADED" and addonName == ADDON then
         XIVExpDB = XIVExpDB or {}
         -- Krona One was bundled briefly and then removed; move anyone using it to Michroma.
         local font = XIVExpDB.font

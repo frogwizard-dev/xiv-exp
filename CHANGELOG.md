@@ -1,5 +1,10 @@
 # XIVExp
 
+## 0.3.6
+
+- Less work: the quest log is walked once after a burst of changes, the clock only ticks while the bar shows, and kill messages make no tables.
+- Shared code (FrogLib 1.12.0): see its notes for the rest of what's fixed.
+
 ## 0.3.5
 
 - Options > AddOns with the gamepad interface: the Frog Wizard pages no longer upset the game's gamepad navigation (which could bring up errors on opening the settings). From FrogLib 1.5.0.
@@ -44,7 +49,7 @@
 ## 0.2.0
 
 ### Reputation
-- The reputation you watch ("Show as Experience Bar" in the Reputation tab) gets its own gauge above the XP bar, with the faction's initials, your standing and your progress: "AD Friendly 2,400/6,000". It's coloured by standing, and at Exalted shows just the faction and standing.
+- The reputation you watch ("Show as Experience Bar" in the Reputation tab) gets its own gauge above the XP bar, with the faction's initials, your standing and your progress: "AD Friendly 2,400/6,000". It's coloured by standing, and at Exalted shows only the faction and standing.
 - At max level with "Hide at max level" on, it takes the XP bar's place.
 - New Reputation tab in the settings: turn it off, change its text (words: short, name, standing, value, max, percent) or give it a fixed colour.
 
